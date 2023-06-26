@@ -17,18 +17,20 @@ contract DEX {
 
     using SafeMath for uint256; //outlines use of SafeMath for uint256 variables
     IERC20 token; //instantiates the imported contract
+    uint256 public totalLiquidity;
+    mapping(address => uint256) public liquidity;
 
     /* ========== EVENTS ========== */
 
     /**
      * @notice Emitted when ethToToken() swap transacted
      */
-    event EthToTokenSwap();
+    event EthToTokenSwap(address indexed buyer, string indexed direction, uint256 inputAmount, uint256 outputAmount);
 
     /**
      * @notice Emitted when tokenToEth() swap transacted
      */
-    event TokenToEthSwap();
+    event TokenToEthSwap(address indexed buyer, string indexed direction, uint256 inputAmount, uint256 outputAmount);
 
     /**
      * @notice Emitted when liquidity provided to DEX and mints LPTs.
@@ -54,7 +56,13 @@ contract DEX {
      * @return totalLiquidity is the number of LPTs minting as a result of deposits made to DEX contract
      * NOTE: since ratio is 1:1, this is fine to initialize the totalLiquidity (wrt to balloons) as equal to eth balance of contract.
      */
-    function init(uint256 tokens) public payable returns (uint256) {}
+    function init(uint256 tokens) public payable returns (uint256) {
+      require(totalLiquidity == 0, "DEX: already initialized");
+      totalLiquidity = address(this).balance;
+      liquidity[msg.sender] = totalLiquidity;
+      require(token.transferFrom(msg.sender, address(this), tokens), "DEX: transfer failed");
+      return totalLiquidity;
+    }
 
     /**
      * @notice returns yOutput, or yDelta for xInput (or xDelta)
@@ -64,24 +72,48 @@ contract DEX {
         uint256 xInput,
         uint256 xReserves,
         uint256 yReserves
-    ) public view returns (uint256 yOutput) {}
+    ) public view returns (uint256 yOutput) {
+      uint256 xInputWithFee = xInput * 997;
+      uint256 numerator = xInputWithFee * yReserves;
+      uint256 denominator = (xReserves * 1000) + xInputWithFee;
+      yOutput = numerator / denominator;
+    }
 
     /**
      * @notice returns liquidity for a user. Note this is not needed typically due to the `liquidity()` mapping variable being public and having a getter as a result. This is left though as it is used within the front end code (App.jsx).
      * if you are using a mapping liquidity, then you can use `return liquidity[lp]` to get the liquidity for a user.
      *
      */
-    function getLiquidity(address lp) public view returns (uint256) {}
+    function getLiquidity(address lp) public view returns (uint256) {
+      return liquidity[lp];
+    }
 
     /**
      * @notice sends Ether to DEX in exchange for $BAL
      */
-    function ethToToken() public payable returns (uint256 tokenOutput) {}
+    function ethToToken() public payable returns (uint256 tokenOutput) {
+      require(msg.value > 0, "DEX: must send ether");
+      uint256 futureEthReserves = address(this).balance - msg.value;
+      uint256 tokenReserves = token.balanceOf(address(this));
+      tokenOutput = price(msg.value, futureEthReserves, tokenReserves);
+      require(token.transfer(msg.sender, tokenOutput), "DEX: transfer failed");
+      emit EthToTokenSwap(msg.sender, "Eth to Balloons", msg.value, tokenOutput);
+      return tokenOutput;
+    }
 
     /**
      * @notice sends $BAL tokens to DEX in exchange for Ether
      */
-    function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {}
+    function tokenToEth(uint256 tokenInput) public returns (uint256 ethOutput) {
+      require(tokenInput > 0, "DEX: must send tokens");
+      uint256 futureTokenReserves = token.balanceOf(address(this)) - tokenInput;
+      uint256 ethReserves = address(this).balance;
+      ethOutput = price(tokenInput, ethReserves, futureTokenReserves);
+      payable(msg.sender).transfer(ethOutput);
+      require(token.transferFrom(msg.sender, address(this), tokenInput), "DEX: transfer failed");
+      emit TokenToEthSwap(msg.sender, "Balloons to Eth", ethOutput, tokenInput);
+      return ethOutput;
+    }
 
     /**
      * @notice allows deposits of $BAL and $ETH to liquidity pool
