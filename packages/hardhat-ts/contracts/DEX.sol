@@ -4,6 +4,7 @@ pragma solidity >=0.8.0 <0.9.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "hardhat/console.sol";
 
 /**
  * @title DEX Template
@@ -35,12 +36,12 @@ contract DEX {
     /**
      * @notice Emitted when liquidity provided to DEX and mints LPTs.
      */
-    event LiquidityProvided();
+    event LiquidityProvided(address indexed lp, uint256 liquidityProvided, uint256 indexed amountToken, uint256 indexed amountETH);
 
     /**
      * @notice Emitted when liquidity removed from DEX and decreases LPT count within DEX.
      */
-    event LiquidityRemoved();
+    event LiquidityRemoved(address indexed lp, uint256 liquidityRemoved, uint256 indexed amountToken, uint256 indexed amountETH);
 
     /* ========== CONSTRUCTOR ========== */
 
@@ -108,7 +109,7 @@ contract DEX {
       require(tokenInput > 0, "DEX: must send tokens");
       uint256 futureTokenReserves = token.balanceOf(address(this)) - tokenInput;
       uint256 ethReserves = address(this).balance;
-      ethOutput = price(tokenInput, ethReserves, futureTokenReserves);
+      ethOutput = price(tokenInput, futureTokenReserves, ethReserves);
       payable(msg.sender).transfer(ethOutput);
       require(token.transferFrom(msg.sender, address(this), tokenInput), "DEX: transfer failed");
       emit TokenToEthSwap(msg.sender, "Balloons to Eth", ethOutput, tokenInput);
@@ -121,11 +122,38 @@ contract DEX {
      * NOTE: user has to make sure to give DEX approval to spend their tokens on their behalf by calling approve function prior to this function call.
      * NOTE: Equal parts of both assets will be removed from the user's wallet with respect to the price outlined by the AMM.
      */
-    function deposit() public payable returns (uint256 tokensDeposited) {}
+    function deposit() public payable returns (uint256 tokensDeposited) {
+      require(msg.value > 0, "DEX: must send ether");
+      uint256 ethReserve = address(this).balance - msg.value;
+      uint256 tokenReserve = token.balanceOf(address(this));
+      uint256 tokenDeposit;
+
+      tokenDeposit = (msg.value * tokenReserve / ethReserve);
+
+      uint256 liquidityMinted = msg.value * totalLiquidity / ethReserve;
+      liquidity[msg.sender] += liquidityMinted;
+      totalLiquidity += liquidityMinted;
+
+      require(token.transferFrom(msg.sender, address(this), tokenDeposit));
+      emit LiquidityProvided(msg.sender, liquidityMinted, msg.value, tokenDeposit);
+      return tokenDeposit;
+    }
 
     /**
      * @notice allows withdrawal of $BAL and $ETH from liquidity pool
      * NOTE: with this current code, the msg caller could end up getting very little back if the liquidity is super low in the pool. I guess they could see that with the UI.
      */
-    function withdraw(uint256 amount) public returns (uint256 eth_amount, uint256 token_amount) {}
+    function withdraw(uint256 amount) public returns (uint256 eth_amount, uint256 token_amount) {
+      require(amount > 0, "DEX: must withdraw something");
+      uint256 tokenReserves = token.balanceOf(address(this));
+      uint256 ethReserves = address(this).balance;
+      uint256 tokenShare = (amount * tokenReserves) / totalLiquidity;
+      uint256 ethShare = (amount * ethReserves) / totalLiquidity;
+      liquidity[msg.sender] -= amount;
+      totalLiquidity -= amount;
+      payable(msg.sender).transfer(ethShare);
+      require(token.transfer(msg.sender, tokenShare), "DEX: transfer failed");
+      emit LiquidityRemoved(msg.sender, amount, tokenShare, ethShare);
+      return (ethShare, tokenShare);
+    }
 }
